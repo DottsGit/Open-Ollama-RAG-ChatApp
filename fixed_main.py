@@ -102,6 +102,10 @@ import json
 import hashlib
 
 def create_vector_db(all_document_chunks, ollama_url, ollama_model, chroma_path, batch_size=30, max_workers=3):
+    """
+    Fixed version of create_vector_db that properly handles missing documents
+    and prevents duplicate entries.
+    """
     # Create directory if it doesn't exist
     os.makedirs(chroma_path, exist_ok=True)
     
@@ -195,7 +199,9 @@ def create_vector_db(all_document_chunks, ollama_url, ollama_model, chroma_path,
     print(f"Skipped {files_skipped} unchanged files")
     print(f"Found {len(modified_sources)} new or modified files with {len(chunks_to_process)} chunks")
     
+    # FIX: Improved handling of missing documents
     # Check if any documents in data directory are missing from the vector database
+    missing_documents = []
     if data_files:
         print(f"Found {len(data_files)} documents in data directory not in source_to_chunks")
         # For each file we need to create new chunks and add them
@@ -205,30 +211,9 @@ def create_vector_db(all_document_chunks, ollama_url, ollama_model, chroma_path,
                 # Load the document
                 loader = TextLoader(file_path, encoding="utf-8")
                 document = loader.load()[0]
+                missing_documents.append(document)
                 
-                # Split by markdown headers
-                text_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=headers_to_split_on)
-                md_chunks = text_splitter.split_text(document.page_content)
-                
-                # Update metadata for each chunk
-                for chunk in md_chunks:
-                    chunk.metadata.update(document.metadata)
-                
-                # Further split by character level
-                char_splitter = RecursiveCharacterTextSplitter(
-                    chunk_size=chunk_size, 
-                    chunk_overlap=chunk_overlap, 
-                    length_function=len, 
-                    add_start_index=True
-                )
-                
-                new_chunks = []
-                for md_chunk in md_chunks:
-                    splits = char_splitter.split_documents([md_chunk])
-                    new_chunks.extend(splits)
-                
-                # Add the new chunks to the processing list
-                chunks_to_process.extend(new_chunks)
+                # Record this as a modified source for cleanup later
                 modified_sources.append(file_path)
                 
                 # Update the tracker for this file
@@ -239,10 +224,32 @@ def create_vector_db(all_document_chunks, ollama_url, ollama_model, chroma_path,
                     "signature": file_signature,
                     "last_processed": time.time()
                 }
-                
-                print(f"Added {len(new_chunks)} chunks from missing file: {file_path}")
             except Exception as e:
                 print(f"Error processing missing file {file_path}: {e}")
+    
+    # Process any missing documents if they were found
+    if missing_documents:
+        print(f"Processing {len(missing_documents)} missing documents...")
+        for document in missing_documents:
+            # Split by markdown headers
+            md_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=headers_to_split_on)
+            md_chunks = md_splitter.split_text(document.page_content)
+            
+            # Update metadata for each chunk
+            for chunk in md_chunks:
+                chunk.metadata.update(document.metadata)
+            
+            # Further split by character level
+            char_splitter = RecursiveCharacterTextSplitter(
+                chunk_size=chunk_size, 
+                chunk_overlap=chunk_overlap, 
+                length_function=len, 
+                add_start_index=True
+            )
+            
+            for md_chunk in md_chunks:
+                splits = char_splitter.split_documents([md_chunk])
+                chunks_to_process.extend(splits)
     
     # If nothing to process, save tracker and return
     if not chunks_to_process:
@@ -251,14 +258,16 @@ def create_vector_db(all_document_chunks, ollama_url, ollama_model, chroma_path,
             json.dump(document_tracker, f, indent=2)
         return chroma_db
     
-    # Remove old vectors from modified files
-    if modified_sources and hasattr(chroma_db._collection, "get") and hasattr(chroma_db._collection, "delete"):
-        try:
-            print("Checking for existing vectors to update...")
+    # FIX: Improved removal of old vectors for modified files
+    # First check if the database has any documents before trying to delete
+    try:
+        if hasattr(chroma_db._collection, "count"):
             collection_count = chroma_db._collection.count()
             
-            if collection_count > 0:
+            if collection_count > 0 and modified_sources and hasattr(chroma_db._collection, "get") and hasattr(chroma_db._collection, "delete"):
+                print("Checking for existing vectors to update...")
                 print(f"Vector database has {collection_count} existing vectors")
+                
                 # Get all metadatas and ids
                 collection_data = chroma_db._collection.get(include=['metadatas', 'ids'])
                 all_metadatas = collection_data.get('metadatas', [])
@@ -267,8 +276,10 @@ def create_vector_db(all_document_chunks, ollama_url, ollama_model, chroma_path,
                 # Find vectors that match modified sources
                 ids_to_delete = []
                 for i, metadata in enumerate(all_metadatas):
-                    if metadata and "source" in metadata and metadata["source"] in modified_sources:
-                        ids_to_delete.append(all_ids[i])
+                    if metadata and "source" in metadata:
+                        source = metadata["source"]
+                        if source in modified_sources:
+                            ids_to_delete.append(all_ids[i])
                 
                 # Delete old vectors for modified files
                 if ids_to_delete:
@@ -277,9 +288,9 @@ def create_vector_db(all_document_chunks, ollama_url, ollama_model, chroma_path,
                     print("Successfully removed outdated vectors")
                 else:
                     print("No existing vectors found for modified files")
-        except Exception as e:
-            print(f"Error removing old vectors: {e}")
-            print("Will continue with adding new vectors")
+    except Exception as e:
+        print(f"Error removing old vectors: {e}")
+        print("Will continue with adding new vectors")
     
     # Function to process a batch of documents
     def process_batch(batch):
@@ -346,8 +357,12 @@ def create_vector_db(all_document_chunks, ollama_url, ollama_model, chroma_path,
     
     return chroma_db
 
-# Add a new function to validate and fix the vector database
+# Improved function to validate and fix the vector database
 def validate_vector_db(chroma_db, data_path):
+    """
+    Improved validation function that provides more detailed feedback
+    on missing documents.
+    """
     if not os.path.exists(data_path):
         print(f"Data path {data_path} not found, skipping validation")
         return
@@ -381,7 +396,7 @@ def validate_vector_db(chroma_db, data_path):
             print(f"Warning: {len(missing_vectors)} documents in {data_path} don't have vectors in the database:")
             for file in missing_vectors:
                 print(f"  Missing: {file}")
-            print("\nTo fix this, set initial_db = True and run the application again to reprocess all documents")
+            print("\nTo fix missing documents, run again with initial_db = True, or manually process these files")
         else:
             print("✓ All documents in the data directory have vectors in the database")
             
@@ -558,4 +573,4 @@ gradio_interface = gr.ChatInterface(
 
 print("Starting Gradio web server...")
 gradio_interface.launch()
-print("Gradio server is running!")
+print("Gradio server is running!") 

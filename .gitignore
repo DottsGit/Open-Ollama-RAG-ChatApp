@@ -166,3 +166,4 @@ cython_debug/
 chroma/
 
 data/*
+document_tracker.json
