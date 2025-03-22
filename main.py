@@ -1,6 +1,6 @@
 ## initial database?
 # -> Set to True if you run the notebook for the first time or if you changed the md files
-initial_db = True
+initial_db = False
 
 print("Starting Ollama RAG ChatApp...")
 
@@ -97,25 +97,128 @@ from langchain.vectorstores import Chroma
 from tqdm import tqdm
 import time
 import concurrent.futures
+import os
+import json
+import hashlib
 
 def create_vector_db(all_document_chunks, ollama_url, ollama_model, chroma_path, batch_size=30, max_workers=3):
-    # Get total number of document chunks
-    total_chunks = len(all_document_chunks)
-    print(f"Processing {total_chunks} document chunks")
+    # Create directory if it doesn't exist
+    os.makedirs(chroma_path, exist_ok=True)
     
-    # Initialize embedding function - without the unsupported parameter
+    # Define path for document tracking file
+    tracker_file = os.path.join(chroma_path, "document_tracker.json")
+    
+    # Initialize or load document tracker
+    document_tracker = {}
+    if os.path.exists(tracker_file):
+        try:
+            with open(tracker_file, 'r') as f:
+                document_tracker = json.load(f)
+            print(f"Loaded document tracker with {len(document_tracker)} entries")
+        except Exception as e:
+            print(f"Error loading document tracker: {e}")
+            document_tracker = {}
+    
+    # Initialize embedding function
     print(f"Initializing OllamaEmbeddings with model {ollama_model}")
     embeddings = OllamaEmbeddings(
         base_url=ollama_url, 
         model=ollama_model
     )
     
-    # Create Chroma instance with optimized settings
-    print(f"Creating Chroma vector database at {chroma_path}")
+    # Load existing Chroma database
+    print(f"Loading Chroma vector database from {chroma_path}")
     chroma_db = Chroma(
         embedding_function=embeddings, 
         persist_directory=chroma_path
     )
+    
+    # Group chunks by source file to process files together
+    print("Organizing document chunks by source file...")
+    source_to_chunks = {}
+    for chunk in all_document_chunks:
+        source = chunk.metadata.get("source", "")
+        if source not in source_to_chunks:
+            source_to_chunks[source] = []
+        source_to_chunks[source].append(chunk)
+    
+    # Check which files have been modified
+    print("Checking for new or modified files...")
+    modified_sources = []
+    chunks_to_process = []
+    files_skipped = 0
+    
+    for source, chunks in source_to_chunks.items():
+        # Skip if source is empty
+        if not source:
+            print(f"Processing chunks with no source information")
+            chunks_to_process.extend(chunks)
+            continue
+        
+        # Check if file exists and get metadata
+        if os.path.exists(source):
+            file_mtime = os.path.getmtime(source)
+            file_size = os.path.getsize(source)
+            
+            # Create file signature that combines path, size and mtime
+            file_signature = f"{source}:{file_size}:{file_mtime}"
+            
+            # Check if file has been modified since last processing
+            if source in document_tracker and document_tracker[source]["signature"] == file_signature:
+                print(f"Skipping unchanged file: {source}")
+                files_skipped += 1
+                continue
+            
+            # File is new or modified
+            print(f"File new or modified, will process: {source}")
+            modified_sources.append(source)
+            chunks_to_process.extend(chunks)
+            
+            # Update tracker for this file
+            document_tracker[source] = {
+                "signature": file_signature,
+                "last_processed": time.time()
+            }
+    
+    print(f"Skipped {files_skipped} unchanged files")
+    print(f"Found {len(modified_sources)} new or modified files with {len(chunks_to_process)} chunks")
+    
+    # If nothing to process, save tracker and return
+    if not chunks_to_process:
+        print("No new or modified files to process")
+        with open(tracker_file, 'w') as f:
+            json.dump(document_tracker, f, indent=2)
+        return chroma_db
+    
+    # Remove old vectors from modified files
+    if modified_sources and hasattr(chroma_db._collection, "get") and hasattr(chroma_db._collection, "delete"):
+        try:
+            print("Checking for existing vectors to update...")
+            collection_count = chroma_db._collection.count()
+            
+            if collection_count > 0:
+                print(f"Vector database has {collection_count} existing vectors")
+                # Get all metadatas and ids
+                collection_data = chroma_db._collection.get(include=['metadatas', 'ids'])
+                all_metadatas = collection_data.get('metadatas', [])
+                all_ids = collection_data.get('ids', [])
+                
+                # Find vectors that match modified sources
+                ids_to_delete = []
+                for i, metadata in enumerate(all_metadatas):
+                    if metadata and "source" in metadata and metadata["source"] in modified_sources:
+                        ids_to_delete.append(all_ids[i])
+                
+                # Delete old vectors for modified files
+                if ids_to_delete:
+                    print(f"Removing {len(ids_to_delete)} existing vectors for modified files")
+                    chroma_db._collection.delete(ids=ids_to_delete)
+                    print("Successfully removed outdated vectors")
+                else:
+                    print("No existing vectors found for modified files")
+        except Exception as e:
+            print(f"Error removing old vectors: {e}")
+            print("Will continue with adding new vectors")
     
     # Function to process a batch of documents
     def process_batch(batch):
@@ -124,7 +227,7 @@ def create_vector_db(all_document_chunks, ollama_url, ollama_model, chroma_path,
             return len(batch)
         except Exception as e:
             print(f"Error processing batch: {e}")
-            # On failure, process documents one by one to identify problematic documents
+            # On failure, process documents one by one
             successful = 0
             for doc in batch:
                 try:
@@ -134,17 +237,17 @@ def create_vector_db(all_document_chunks, ollama_url, ollama_model, chroma_path,
                     print(f"Problem with document: {doc.page_content[:50]}... Error: {e}")
             return successful
     
-    # Process in optimized batches with parallel workers
+    # Process in batches with parallel workers
     print(f"Starting batch processing with batch_size={batch_size}, max_workers={max_workers}")
     start_time = time.time()
     processed_count = 0
     
     # Create batches
-    batches = [all_document_chunks[i:i+batch_size] for i in range(0, total_chunks, batch_size)]
+    batches = [chunks_to_process[i:i+batch_size] for i in range(0, len(chunks_to_process), batch_size)]
     print(f"Created {len(batches)} batches for processing")
     
     # Process batches with progress tracking
-    with tqdm(total=total_chunks, desc="Creating Vector Database") as pbar:
+    with tqdm(total=len(chunks_to_process), desc="Adding New Vectors") as pbar:
         # Use ThreadPoolExecutor for parallel processing
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             # Submit all batches to the executor
@@ -156,19 +259,24 @@ def create_vector_db(all_document_chunks, ollama_url, ollama_model, chroma_path,
                 processed_count += batch_count
                 pbar.update(batch_count)
                 
-                # Persist periodically (e.g., every ~10% of documents)
-                if processed_count % max(int(total_chunks * 0.1), batch_size) < batch_size:
-                                        chroma_db.persist()
-                    
+                # Persist periodically
+                if processed_count % max(int(len(chunks_to_process) * 0.1), batch_size) < batch_size:
+                    print(f"Persisting database after processing {processed_count} chunks...")
+                    chroma_db.persist()
+    
     # Final persistence
     print("Performing final database persistence...")
     chroma_db.persist()
     
+    # Save tracker
+    with open(tracker_file, 'w') as f:
+        json.dump(document_tracker, f, indent=2)
+    
     # Calculate and display metrics
     elapsed_time = time.time() - start_time
-    docs_per_second = processed_count / elapsed_time
+    docs_per_second = processed_count / elapsed_time if elapsed_time > 0 else 0
     
-    print(f"Vector database created with {processed_count} document chunks!")
+    print(f"Vector database updated with {processed_count} new document chunks!")
     print(f"Total time: {elapsed_time:.2f} seconds ({docs_per_second:.2f} docs/second)")
     
     return chroma_db
@@ -181,8 +289,8 @@ if initial_db:
         ollama_url=OLLAMA_URL,
         ollama_model=OLLAMA_MODEL,
         chroma_path=CHROMA_PATH,
-        batch_size=512,  # Adjust based on your system and model
-        max_workers=150  # Adjust based on CPU cores and memory
+        batch_size=8,  # Adjust based on your system and model
+        max_workers=100  # Adjust based on CPU cores and memory
     )
 else:
     print("\nSkipping vector database creation - using existing database")
@@ -215,25 +323,43 @@ def chat_ollama(message, history):
 
     # search for similar documents in chroma db
     print("Searching vector database for relevant documents...")
-    result_chunks = chroma_db.similarity_search(message)
+    result_chunks = chroma_db.similarity_search(message, k=10)  # Request 10 chunks
     print(f"Found {len(result_chunks)} relevant document chunks")
     
+    # Print source information for each chunk to diagnose the issue
+    print("Document chunks come from these sources:")
+    for i, chunk in enumerate(result_chunks):
+        source = chunk.metadata["source"]
+        print(f"  Chunk {i+1}: {source}")
+    
+    # First pass: build a mapping of unique sources
+    source_map = {}  # Maps source paths to reference numbers
+    ref_counter = 1
+    
+    for chunk in result_chunks:
+        source = chunk.metadata["source"]
+        if source not in source_map:
+            source_map[source] = ref_counter
+            ref_counter += 1
+    
+    print(f"Found {len(source_map)} unique document sources")
+    
+    # Build knowledge context using consistent source IDs from the mapping
     chroma_knowledge = ""
-    for id, chunk in enumerate(result_chunks):
-        source_id = id + 1
-        chroma_knowledge += "[" + str(source_id) +"] \n" + chunk.page_content + "\n"
-
+    for chunk in result_chunks:
+        source = chunk.metadata["source"]
+        source_id = source_map[source]
+        chroma_knowledge += f"[{source_id}]\n{chunk.page_content}\n"
+    
+    # Build the references section using the same mapping
     sources = ""
-    for id, chunk in enumerate(result_chunks):
-        source_id = id + 1
-        sources += "[" + str(source_id) + "] \n" + chunk.metadata["source"] + "\n"
+    for source, ref_id in sorted(source_map.items(), key=lambda x: x[1]):
+        sources += f"[{ref_id}]\n{source}\n"
 
     print("Building prompt with retrieved knowledge and sending to Ollama...")
     prompt = "Answer the following question using the provided knowledge and the chat history:\n\n###KNOWLEDGE: " + chroma_knowledge + "\n###CHAT-HISTORY: " + str(history) + "\n\n###QUESTION: " + message
     result = ollama(prompt) + "\n\n\nReferences:\n" + sources 
     print("Response generated successfully")
-
-    # print(prompt)
     
     return result
 
