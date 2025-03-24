@@ -1,10 +1,15 @@
+import pytest
 from src.vector_db import load_vector_db
 import os
 
-def test_chat_query(query, k=3):
+def test_chat_query():
     """
-    Simulate a chat query to test retrieval capabilities
+    Test that the vector database can retrieve documents
     """
+    # Define a test query
+    query = "Test query"
+    k = 3
+    
     try:
         # Load the vector database
         db = load_vector_db()
@@ -12,30 +17,17 @@ def test_chat_query(query, k=3):
         # Perform similarity search
         docs = db.similarity_search(query, k=k)
         
-        print(f"Query: {query}\n")
-        print("Retrieved Documents:")
+        # Assert that we got some documents back
+        assert len(docs) > 0, "Expected to get at least one document back"
         
-        found_target = False
-        
-        for i, doc in enumerate(docs):
-            source = doc.metadata.get("source", "Unknown")
-            content = doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content
-            
-            print(f"\nDocument {i+1} from: {os.path.basename(source)}")
-            print(f"Content: {content}\n")
-            
-            if "104-10326-10014" in source:
-                found_target = True
-                print("*** TARGET DOCUMENT FOUND ***")
-        
-        if not found_target:
-            print("\n*** TARGET DOCUMENT NOT FOUND IN RESULTS ***")
-        
-        print("\nSimulated Answer:")
-        print("Based on the retrieved documents, I would generate an answer here.")
+        # Check that each document has the expected structure
+        for doc in docs:
+            assert hasattr(doc, 'page_content'), "Document should have page_content"
+            assert hasattr(doc, 'metadata'), "Document should have metadata"
+            assert 'source' in doc.metadata, "Document metadata should have source"
     
     except Exception as e:
-        print(f"Error during query: {str(e)}")
+        pytest.fail(f"Error during query: {str(e)}")
 
 if __name__ == "__main__":
     # Test more specific queries to see if we can get 104-10326-10014.md
@@ -47,5 +39,5 @@ if __name__ == "__main__":
     
     for query in queries:
         print("\n" + "="*80)
-        test_chat_query(query)
+        test_chat_query()
         print("="*80 + "\n") 

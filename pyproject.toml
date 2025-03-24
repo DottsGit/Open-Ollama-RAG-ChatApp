@@ -25,3 +25,8 @@ pytest = "^8.0.0"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 addopts = "-v"
+filterwarnings = [
+    "ignore::UserWarning:onnxruntime.*:",
+    "ignore::DeprecationWarning:importlib.*:",
+    "ignore::DeprecationWarning:google.*:"
+]

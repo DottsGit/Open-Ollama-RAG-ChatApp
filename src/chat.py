@@ -32,7 +32,7 @@ def get_ollama_client(ollama_url: str = OLLAMA_URL, ollama_model: str = OLLAMA_M
     print(f"Initializing Ollama client with model {ollama_model}")
     return Ollama(base_url=ollama_url, model=ollama_model)
 
-def search_similar_chunks(query: str, chroma_db: Chroma, top_k: int = 5) -> List[str]:
+def search_similar_chunks(query: str, chroma_db: Chroma, top_k: int = 10) -> List[str]:
     """
     Search for similar chunks in the vector database.
     

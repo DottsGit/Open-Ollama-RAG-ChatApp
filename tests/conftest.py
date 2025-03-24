@@ -3,18 +3,22 @@ Pytest configuration file.
 """
 
 import pytest
-import os
+import warnings
 import sys
+import os
 
-# Add the parent directory to the path so that we can import from src
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+# Add the parent directory to sys.path
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-# Register test markers
+# Import and apply our monkey patch to suppress ONNX Runtime warnings
+from tests.monkey_patch import filtered_warn
+warnings.warn = filtered_warn
+
 def pytest_configure(config):
-    """Configure pytest."""
-    config.addinivalue_line("markers", "integration: mark a test as an integration test")
-    config.addinivalue_line("markers", "slow: mark a test as a slow test")
-    config.addinivalue_line("markers", "unit: mark a test as a unit test")
+    """
+    Configure pytest.
+    """
+    pass
 
 def pytest_sessionstart(session):
     """

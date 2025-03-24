@@ -28,6 +28,7 @@ This application uses the following components:
 │   └── vector_db.py      # Vector database interactions
 ├── tests/                # Tests for the application
 │   ├── conftest.py       # Pytest configuration
+│   ├── monkey_patch.py   # Runtime patches for library warnings
 │   ├── test_document_processor.py
 │   ├── test_document_tracker.py
 │   └── test_vector_db.py
@@ -75,6 +76,10 @@ Run the tests using pytest:
 ```bash
 pytest
 ```
+
+The test suite includes runtime fixes for common dependency warnings:
+- Protobuf: Updated to version 5.x along with compatible dependencies to address deprecation warnings
+- ONNX Runtime: Applied a runtime patch to suppress false Windows version warnings
 
 ## Configuration
 
