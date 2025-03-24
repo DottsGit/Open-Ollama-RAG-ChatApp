@@ -24,5 +24,5 @@ CHUNK_SIZE = 500
 CHUNK_OVERLAP = 100
 
 # Vector database configuration
-BATCH_SIZE = 30
-MAX_WORKERS = 3 
+BATCH_SIZE = 100
+MAX_WORKERS = 100

@@ -73,7 +73,7 @@ def main():
     # Launch the Gradio app
     print(f"Launching Gradio app on port {args.port}...")
     chat_interface.launch(
-        server_name="0.0.0.0",
+        server_name="localhost",
         server_port=args.port,
         share=args.share
     )

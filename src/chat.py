@@ -5,6 +5,7 @@ This module handles interactions with Ollama LLM and Gradio chat interface.
 """
 
 import os
+import re
 from typing import List, Dict, Any, Tuple, Optional
 
 import gradio as gr
@@ -43,7 +44,53 @@ def search_similar_chunks(query: str, chroma_db: Chroma, top_k: int = 5) -> List
     Returns:
         List of document chunks as formatted strings
     """
-    # Perform similarity search
+    # Check if the query contains a document ID pattern (e.g., 104-10326-10014)
+    doc_id_pattern = r'\b\d{3}-\d{5}-\d{5}\b'
+    doc_ids = re.findall(doc_id_pattern, query)
+    
+    if doc_ids:
+        print(f"Document ID(s) detected in query: {doc_ids}")
+        direct_results = []
+        
+        # Get all documents
+        all_docs = chroma_db.get()
+        
+        # Track if we found any direct matches
+        found_direct_match = False
+        
+        # Search for documents matching the IDs
+        for doc_id in doc_ids:
+            for i, metadata in enumerate(all_docs["metadatas"]):
+                if metadata and "source" in metadata and doc_id in metadata["source"]:
+                    source = metadata["source"]
+                    content = all_docs["documents"][i]
+                    
+                    # Add it to the direct results
+                    direct_results.append((source, content))
+                    found_direct_match = True
+                    
+                    # Limit to top_k results per document ID
+                    if len(direct_results) >= top_k:
+                        break
+        
+        # If we found direct matches, format and return them
+        if found_direct_match:
+            formatted_results = []
+            for i, (source, content) in enumerate(direct_results):
+                # Format the document content
+                formatted_content = f"[{i+1}] {content}"
+                
+                # Add source information
+                if source:
+                    formatted_content += f"\n-- Source: {os.path.basename(source)}"
+                
+                formatted_results.append(formatted_content)
+            
+            print(f"Found {len(formatted_results)} direct document matches")
+            return formatted_results
+    
+    # If no document IDs or no direct matches found, fall back to similarity search
+    print("Performing similarity search")
     results = chroma_db.similarity_search(query, k=top_k)
     
     # Format the results
