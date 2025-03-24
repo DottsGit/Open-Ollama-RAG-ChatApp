@@ -1,14 +1,28 @@
+"""
+Test the document tracker functionality.
+
+This test ensures that the document tracker correctly identifies new, modified, and unchanged files.
+"""
+
 import os
 import time
 import json
 import shutil
 import tempfile
-import sys
+import pytest
 
-# Create a completely separate test that doesn't touch the main data
+from src.config import TRACKER_PATH
+
 def test_file_change_detection():
-    print("Starting file change detection test...")
+    """
+    Test that the document tracker correctly identifies file changes.
     
+    This test checks:
+    1. Initial processing of a new file
+    2. Skipping unchanged files
+    3. Processing modified files
+    4. Processing only new files when multiple files exist
+    """
     # Create a temporary directory for all test files
     temp_dir = tempfile.mkdtemp()
     test_data_dir = os.path.join(temp_dir, "test_data")
@@ -19,7 +33,7 @@ def test_file_change_detection():
     os.makedirs(test_chroma_dir, exist_ok=True)
     
     # Path for tracker file
-    tracker_file = os.path.join(test_chroma_dir, "document_tracker.json")
+    tracker_file = os.path.join(test_chroma_dir, TRACKER_PATH)
     
     try:
         # Create document tracker
@@ -63,14 +77,11 @@ def test_file_change_detection():
         file1_size = os.path.getsize(file1_path)
         file1_signature_new = f"{file1_path}:{file1_size}:{file1_mtime}"
         
-        if file1_path in document_tracker and document_tracker[file1_path]["signature"] == file1_signature_new:
-            print(f"Correctly skipped unchanged file: {file1_path}")
-            print("Test 2 PASSED")
-        else:
-            print(f"ERROR: Test 2 FAILED - File should be skipped but was detected as changed!")
-            print(f"  Old signature: {document_tracker[file1_path]['signature']}")
-            print(f"  New signature: {file1_signature_new}")
-            return False
+        # File should not be detected as changed
+        assert file1_path in document_tracker, "File should be in tracker"
+        assert document_tracker[file1_path]["signature"] == file1_signature_new, "File signature should not have changed"
+        
+        print("Test 2 PASSED")
         
         # TEST 3: Process a modified file
         print("\n=== TEST 3: Process Modified File ===")
@@ -87,25 +98,22 @@ def test_file_change_detection():
         file1_size = os.path.getsize(file1_path)
         file1_signature_modified = f"{file1_path}:{file1_size}:{file1_mtime}"
         
-        # Verify file is detected as changed
-        if file1_path in document_tracker and document_tracker[file1_path]["signature"] == file1_signature_modified:
-            print(f"ERROR: Test 3 FAILED - Modified file not detected as changed!")
-            return False
-        else:
-            print(f"Correctly detected modified file: {file1_path}")
-            
-            # Process the modified file
-            print(f"Processing modified file: {file1_path}")
-            document_tracker[file1_path] = {
-                "signature": file1_signature_modified,
-                "last_processed": time.time()
-            }
-            
-            # Save tracker
-            with open(tracker_file, 'w') as f:
-                json.dump(document_tracker, f, indent=2)
-            
-            print("Test 3 PASSED")
+        # File should be detected as changed
+        assert file1_path in document_tracker, "File should be in tracker"
+        assert document_tracker[file1_path]["signature"] != file1_signature_modified, "Modified file should have different signature"
+        
+        # Process the modified file
+        print(f"Processing modified file: {file1_path}")
+        document_tracker[file1_path] = {
+            "signature": file1_signature_modified,
+            "last_processed": time.time()
+        }
+        
+        # Save tracker
+        with open(tracker_file, 'w') as f:
+            json.dump(document_tracker, f, indent=2)
+        
+        print("Test 3 PASSED")
         
         # TEST 4: Process only new files when multiple files exist
         print("\n=== TEST 4: Process Only New Files ===")
@@ -124,11 +132,11 @@ def test_file_change_detection():
         file1_size = os.path.getsize(file1_path)
         file1_signature_current = f"{file1_path}:{file1_size}:{file1_mtime}"
         
+        # First file should be unchanged
         if file1_path in document_tracker and document_tracker[file1_path]["signature"] == file1_signature_current:
             print(f"Correctly skipped unchanged file: {file1_path}")
             files_skipped += 1
         else:
-            print(f"ERROR: Modified file incorrectly detected as changed")
             files_processed += 1
             document_tracker[file1_path] = {
                 "signature": file1_signature_current,
@@ -140,16 +148,15 @@ def test_file_change_detection():
         file2_size = os.path.getsize(file2_path)
         file2_signature = f"{file2_path}:{file2_size}:{file2_mtime}"
         
-        if file2_path in document_tracker and document_tracker[file2_path]["signature"] == file2_signature:
-            print(f"ERROR: New file incorrectly detected as existing!")
-            files_skipped += 1
-        else:
-            print(f"Correctly processing new file: {file2_path}")
-            files_processed += 1
-            document_tracker[file2_path] = {
-                "signature": file2_signature,
-                "last_processed": time.time()
-            }
+        # Second file should be new
+        assert file2_path not in document_tracker, "New file should not be in tracker"
+        
+        print(f"Correctly processing new file: {file2_path}")
+        files_processed += 1
+        document_tracker[file2_path] = {
+            "signature": file2_signature,
+            "last_processed": time.time()
+        }
         
         # Save tracker
         with open(tracker_file, 'w') as f:
@@ -158,18 +165,11 @@ def test_file_change_detection():
         # Verify results
         print(f"Files processed: {files_processed}, Files skipped: {files_skipped}")
         
-        if files_processed == 1 and files_skipped == 1:
-            print("Test 4 PASSED: Only the new file was processed")
-        else:
-            print("Test 4 FAILED: Wrong number of files processed")
-            return False
+        assert files_processed == 1, "Only one new file should be processed"
+        assert files_skipped == 1, "Only one file should be skipped"
         
+        print("Test 4 PASSED")
         print("\nAll tests PASSED!")
-        return True
-        
-    except Exception as e:
-        print(f"Error during testing: {e}")
-        return False
         
     finally:
         # Clean up
@@ -180,5 +180,4 @@ def test_file_change_detection():
             print(f"Error cleaning up: {e}")
 
 if __name__ == "__main__":
-    success = test_file_change_detection()
-    sys.exit(0 if success else 1) 
+    test_file_change_detection() 
