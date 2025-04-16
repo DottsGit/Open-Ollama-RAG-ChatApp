@@ -4,8 +4,13 @@ Configuration settings for the RAG application.
 
 # Paths
 DATA_PATH = "data/"
-CHROMA_PATH = "chroma/"
+# CHROMA_PATH = "chroma/" # Old single path
+DB_BASE_PATH = "chroma_dbs/" # Base directory for all topic databases
 TRACKER_PATH = "document_tracker.json"
+
+# Topics
+# List the subdirectories in DATA_PATH that correspond to topics
+TOPICS = ["jfk_files", "literature", "math", "science"] 
 
 # Ollama configuration
 OLLAMA_MODEL = "DeepSeek-R1:14b"

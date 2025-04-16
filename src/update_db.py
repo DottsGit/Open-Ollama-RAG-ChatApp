@@ -6,108 +6,130 @@ This script handles updating the vector database when files are added or modifie
 
 import argparse
 import sys
+import os
 from typing import List, Dict, Any
 
+from src import config
 from src.config import (
-    DATA_PATH,
-    CHROMA_PATH,
+    TOPICS,
     OLLAMA_MODEL,
-    OLLAMA_URL
+    OLLAMA_URL,
+    DB_BASE_PATH
 )
 from src.document_processor import load_documents, process_documents
-from src.vector_db import create_vector_db, validate_vector_db, load_vector_db, get_embeddings
+from src.vector_db import create_vector_db, validate_vector_db, load_vector_db, get_embeddings, get_topic_paths
 
 def update_database(
-    data_path: str = DATA_PATH,
-    chroma_path: str = CHROMA_PATH,
     ollama_url: str = OLLAMA_URL,
     ollama_model: str = OLLAMA_MODEL,
-    validate_only: bool = False
-):
+    validate_only: bool = False,
+    specific_topic: str | None = None
+) -> Dict[str, List[str]]:
     """
-    Update the vector database with new or modified files.
-    
+    Update or validate vector databases for specified topics.
+
     Args:
-        data_path: Path to the data directory
-        chroma_path: Path to the Chroma database
         ollama_url: URL of the Ollama server
         ollama_model: Name of the Ollama model to use
-        validate_only: Only validate the database, don't update it
+        validate_only: Only validate the databases, don't update them
+        specific_topic: If set, only process this topic.
+
+    Returns:
+        Dictionary mapping topic name to a list of missing files for that topic.
     """
     print(f"Starting database update process...")
     print(f"Using model: {ollama_model}")
-    print(f"Data path: {data_path}")
-    print(f"Chroma path: {chroma_path}")
-    
-    # If validate_only is True, just validate the database
-    if validate_only:
-        print("Validation only mode, checking database...")
-        embeddings = get_embeddings(ollama_url, ollama_model)
-        chroma_db = load_vector_db(chroma_path, embeddings)
-        missing_files = validate_vector_db(chroma_db, data_path)
-        
-        if missing_files:
-            print(f"Found {len(missing_files)} files not in the database:")
-            for file in missing_files:
-                print(f"  - {file}")
-        else:
-            print("All files in the data directory are in the database")
-        
-        return missing_files
-    
-    # Load documents
-    print("Loading documents...")
-    documents = load_documents(data_path)
-    
-    if not documents:
-        print("No documents found, exiting")
-        return []
-    
-    # Process documents
-    print("Processing documents...")
-    document_chunks = process_documents(documents)
-    
-    # Create or update the vector database
-    print("Creating or updating vector database...")
-    chroma_db, document_tracker = create_vector_db(
-        all_document_chunks=document_chunks,
-        chroma_path=chroma_path,
-        data_path=data_path,
-        ollama_url=ollama_url,
-        ollama_model=ollama_model
-    )
-    
-    # Validate the database
-    print("Validating database...")
-    missing_files = validate_vector_db(chroma_db, data_path)
-    
-    return missing_files
+
+    topics_to_process = [specific_topic] if specific_topic else TOPICS
+    all_missing_files = {}
+
+    for topic in topics_to_process:
+        print(f"\n--- Processing topic: {topic} ---")
+        try:
+            data_path, chroma_path = get_topic_paths(topic)
+        except ValueError as e:
+            print(f"Error getting paths for topic '{topic}': {e}. Skipping.")
+            all_missing_files[topic] = ["Error getting paths"]
+            continue
+
+        print(f"Data path: {data_path}")
+        print(f"Chroma path: {chroma_path}")
+
+        os.makedirs(data_path, exist_ok=True)
+        os.makedirs(chroma_path, exist_ok=True)
+
+        if validate_only:
+            print(f"Validation only mode, checking database for topic '{topic}'...")
+            missing_files = validate_vector_db(topic)
+            all_missing_files[topic] = missing_files
+            if missing_files:
+                print(f"Found {len(missing_files)} files not in the '{topic}' database:")
+                for file in missing_files:
+                    print(f"  - {file}")
+            else:
+                print(f"All files in {data_path} are in the '{topic}' database")
+            continue
+
+        try:
+            print(f"Loading documents for topic '{topic}' from {data_path}...")
+            documents = load_documents(data_path)
+
+            if not documents:
+                print(f"No documents found in {data_path} for topic '{topic}', skipping update.")
+                print(f"Validating existing database for topic '{topic}'...")
+                all_missing_files[topic] = validate_vector_db(topic)
+                continue
+
+            print(f"Processing {len(documents)} documents for topic '{topic}'...")
+            document_chunks = process_documents(documents)
+
+            print(f"Creating or updating vector database for topic '{topic}'...")
+            chroma_db, document_tracker = create_vector_db(
+                topic=topic,
+                all_document_chunks=document_chunks,
+                ollama_url=ollama_url,
+                ollama_model=ollama_model
+            )
+
+            print(f"Validating database for topic '{topic}'...")
+            missing_files = validate_vector_db(topic)
+            all_missing_files[topic] = missing_files
+
+        except Exception as e:
+            print(f"An error occurred processing topic '{topic}': {e}")
+            all_missing_files[topic] = [f"Error processing topic: {e}"]
+
+    print("\n--- Database update process finished ---")
+    return all_missing_files
 
 def main():
     """
     Main entry point for the database update script.
     """
-    parser = argparse.ArgumentParser(description="Update the RAG vector database")
-    parser.add_argument("--data-path", type=str, default=DATA_PATH, help="Path to the data directory")
-    parser.add_argument("--chroma-path", type=str, default=CHROMA_PATH, help="Path to the Chroma database")
+    parser = argparse.ArgumentParser(description="Update the RAG vector database for specified topics")
+    parser.add_argument("--topic", type=str, default=None, choices=TOPICS + [None], help="Update only a specific topic (default: all)")
     parser.add_argument("--ollama-url", type=str, default=OLLAMA_URL, help="URL of the Ollama server")
     parser.add_argument("--ollama-model", type=str, default=OLLAMA_MODEL, help="Name of the Ollama model to use")
-    parser.add_argument("--validate-only", action="store_true", help="Only validate the database, don't update it")
-    
+    parser.add_argument("--validate-only", action="store_true", help="Only validate the database(s), don't update")
+
     args = parser.parse_args()
-    
-    missing_files = update_database(
-        data_path=args.data_path,
-        chroma_path=args.chroma_path,
+
+    missing_files_map = update_database(
         ollama_url=args.ollama_url,
         ollama_model=args.ollama_model,
-        validate_only=args.validate_only
+        validate_only=args.validate_only,
+        specific_topic=args.topic
     )
-    
-    # Return non-zero exit code if there are missing files
-    if missing_files and args.validate_only:
+
+    has_missing_or_errors = any(bool(files) for files in missing_files_map.values())
+
+    if has_missing_or_errors and args.validate_only:
+        print("\nValidation issues found.")
         sys.exit(1)
-    
+    elif has_missing_or_errors:
+        print("\nUpdate process completed, but some issues were found during validation.")
+
+    print("\nUpdate completed successfully.")
     sys.exit(0)
 
 if __name__ == "__main__":

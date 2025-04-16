@@ -11,6 +11,7 @@ from typing import List, Dict, Any, Tuple, Optional
 import gradio as gr
 from langchain_community.llms import Ollama
 from langchain_community.vectorstores import Chroma
+from langchain_community.embeddings import OllamaEmbeddings
 
 from src.config import (
     OLLAMA_MODEL,
@@ -136,61 +137,86 @@ Answer:"""
     
     return prompt
 
-def chat_ollama(message: str, history: List[Tuple[str, str]], chroma_db: Optional[Chroma] = None):
+def create_chat_interface(embeddings: OllamaEmbeddings, topics: List[str]):
     """
-    Process a chat message using Ollama and the vector database.
-    
-    Args:
-        message: User's message
-        history: Chat history
-        chroma_db: Chroma database object
-        
-    Returns:
-        LLM's response
-    """
-    # Initialize the vector database if not provided
-    if chroma_db is None:
-        embeddings = get_embeddings()
-        chroma_db = load_vector_db(embeddings=embeddings)
-    
-    # Initialize the Ollama client
-    ollama = get_ollama_client()
-    
-    # Search for similar chunks
-    similar_chunks = search_similar_chunks(message, chroma_db)
-    
-    # Create the prompt
-    if similar_chunks:
-        prompt = create_prompt(message, similar_chunks)
-    else:
-        # If no similar chunks found, just use the message directly
-        prompt = message
-    
-    # Get the response from Ollama
-    response = ollama(prompt)
-    
-    return response
+    Create the Gradio chat interface with topic selection.
 
-def create_chat_interface(chroma_db: Chroma):
-    """
-    Create the Gradio chat interface.
-    
     Args:
-        chroma_db: Chroma database object
-        
+        embeddings: Initialized OllamaEmbeddings object.
+        topics: List of available topic names.
+
     Returns:
-        Gradio ChatInterface object
+        Gradio Blocks interface object.
     """
-    # Create a wrapped chat function that includes the database
-    def chat_fn(message, history):
-        return chat_ollama(message, history, chroma_db)
-    
-    # Create the chat interface
-    chat_interface = gr.ChatInterface(
-        chat_fn,
-        examples=["What is Langchain?", "Tell me about vector databases", "How does RAG work?"],
-        title="Ollama RAG ChatApp",
-        description="Chat with your documents using Ollama and RAG",
-    )
-    
+    print(f"Creating chat interface with topics: {topics}")
+
+    with gr.Blocks() as chat_interface:
+        gr.Markdown("## Ollama RAG ChatApp with Topic Selection")
+
+        with gr.Row():
+            with gr.Column(scale=1):
+                gr.Markdown("### Select Topic")
+                topic_selector = gr.Radio(
+                    choices=topics,
+                    value=topics[0] if topics else None, # Default to first topic
+                    label="Chat Topic",
+                    info="Choose the knowledge base to chat with."
+                )
+            with gr.Column(scale=4):
+                chatbot = gr.Chatbot(label="Chat History", height=500)
+                msg_input = gr.Textbox(label="Your Message", placeholder="Type your question here...")
+                clear_button = gr.Button("Clear Chat")
+
+        # Define the core chat logic function
+        def respond(message, chat_history, selected_topic):
+            print(f"\nReceived message: '{message}' for topic: '{selected_topic}'")
+            if not selected_topic:
+                 gr.Warning("Please select a topic first!")
+                 return "", chat_history # Return empty response if no topic
+
+            try:
+                # 1. Load the correct vector database for the selected topic
+                print(f"Loading vector DB for topic: {selected_topic}")
+                # Pass the pre-initialized embeddings object
+                chroma_db = load_vector_db(topic=selected_topic, embeddings=embeddings)
+
+                # 2. Initialize the Ollama client (can be done once outside if preferred)
+                ollama = get_ollama_client()
+
+                # 3. Search for similar chunks
+                print(f"Searching for similar chunks for query: '{message}'")
+                similar_chunks = search_similar_chunks(message, chroma_db)
+
+                # 4. Create the prompt
+                if similar_chunks:
+                    print(f"Found {len(similar_chunks)} similar chunks. Creating prompt.")
+                    prompt = create_prompt(message, similar_chunks)
+                    # Optional: Add context to the chat history for visibility
+                    # context_display = "\n".join([f"- {chunk[:100]}..." for chunk in similar_chunks])
+                    # chat_history.append(("[Context Retrieved]", context_display))
+                else:
+                    print("No similar chunks found. Using direct query as prompt.")
+                    prompt = message
+
+                # 5. Get the response from Ollama
+                print("Sending prompt to Ollama...")
+                response = ollama(prompt)
+                print(f"Received response from Ollama.")
+
+                chat_history.append((message, response))
+                return "", chat_history # Clear input box, update history
+
+            except Exception as e:
+                print(f"Error during chat processing for topic '{selected_topic}': {e}")
+                gr.Error(f"An error occurred: {e}") # Show error in UI
+                # Add error message to chat history as well
+                chat_history.append((message, f"Sorry, an error occurred: {e}"))
+                return "", chat_history # Clear input box, update history with error
+
+        # Connect components
+        msg_input.submit(respond, [msg_input, chatbot, topic_selector], [msg_input, chatbot])
+        clear_button.click(lambda: (None, []), None, [msg_input, chatbot], queue=False)
+        # Optional: Allow changing topic to clear chat? Or keep history?
+        # topic_selector.change(lambda: (None, []), None, [msg_input, chatbot], queue=False) # Clears chat on topic change
+
     return chat_interface 

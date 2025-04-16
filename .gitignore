@@ -167,3 +167,4 @@ chroma/
 
 data/*
 document_tracker.json
+*.sqlite3
