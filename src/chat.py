@@ -201,8 +201,16 @@ def create_chat_interface(embeddings: OllamaEmbeddings, topics: List[str]):
                 if similar_chunks:
                     print(f"Found {len(similar_chunks)} similar chunks. Creating prompt.")
                     prompt = create_prompt(message, similar_chunks)
-                    context_display = "\n".join([f"- {chunk[:100]}..." for chunk in similar_chunks])
-                    context_prefix = f"**Retrieved Context:**\n{context_display}\n\n---\n\n"
+                    # Extract filenames instead of content snippets
+                    filenames = []
+                    for chunk in similar_chunks:
+                        match = re.search(r"-- Source: (.*)$", chunk)
+                        if match:
+                            filenames.append(f"- {match.group(1).strip()}")
+                        else:
+                            filenames.append("- Unknown Source")
+                    context_display = "\n".join(filenames)
+                    context_prefix = f"**Retrieved Context From:**\n{context_display}\n\n---\n\n" # Changed label slightly
                     # OPTIONAL: Add context as a separate message (alternative to prefixing)
                     # chat_history.append({"role": "system", "content": f"Retrieved Context:\n{context_display}"}) 
                 else:
