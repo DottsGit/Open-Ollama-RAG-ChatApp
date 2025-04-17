@@ -11,8 +11,8 @@ import concurrent.futures
 from typing import List, Dict, Any, Optional, Tuple
 
 from langchain.schema.document import Document
-from langchain_community.embeddings import OllamaEmbeddings
-from langchain_community.vectorstores import Chroma
+from langchain_ollama import OllamaEmbeddings
+from langchain_chroma import Chroma
 
 from src import config # Import the whole config module
 from src.config import (

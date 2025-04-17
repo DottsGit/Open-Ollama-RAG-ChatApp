@@ -168,3 +168,4 @@ chroma/
 data/*
 document_tracker.json
 *.sqlite3
+chroma_dbs/*

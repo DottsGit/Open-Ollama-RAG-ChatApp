@@ -20,11 +20,27 @@ BENCHMARK_QUESTIONS: Dict[str, List[Dict[str, str]]] = {
     "literature": [
         {"question": "Who wrote Hamlet?", "keywords": "Shakespeare, William"},
         {"question": "What is the main theme of 'To Kill a Mockingbird'?", "keywords": "justice, prejudice, innocence, mockingbird"},
+        {"question": "What makes the Gospel book of Mark unique among the Gospels?", "keywords": "straightforward, urgent, Jesus's actions"},
+        {"question": "What makes the Gospel book of Matthew unique among the Gospels?", "keywords": "structured, formal, teaching focused, Papacy, Pope"},
+        {"question": "What makes the Gospel book of Luke unique among the Gospels?", "keywords": "polished, historical, detailed"},
+        {"question": "What makes the Gospel book of John unique among the Gospels?", "keywords": "philosophical, symbolic, theological, broad, reflective"},
+        {"question": "What was the main event in Matthew 16:16-19?", "keywords": "first Pope, Papacy, ordination, peter is the first pope, Catholic Church"},
+        {"question": "What was the name of the first Pope?", "keywords": "Peter, Simon, Simon Peter, Apostle Peter"},
+        {"question": "What was the title given to Mary by Gabriel in the Gospel book of Luke and what did it mean?", "keywords": "full of grace, κεχαριτωμένη, kecharitomene, without sin, will not sin"},
+        {"question": "What were Jesus's last words on the cross according to Luke?", "keywords": "Father, forgive them, for they know not what they do"},
         # Add more literature questions
     ],
     "math": [
         {"question": "What is the Pythagorean theorem?", "keywords": "a^2, b^2, c^2, right, triangle, hypotenuse"},
         {"question": "What is the derivative of x^2?", "keywords": "2x, power rule, calculus"},
+        {"question": "What is x*4 when x=5?", "keywords": "20"},
+        {"question": "Solve -11*y - 263*y + 3162 = -88*y for y", "keywords": "17"},
+        {"question": "Solve 20*a + 0*a - 10*a = -40 for a.", "keywords": "-4"},
+        {"question": "Solve 24 = 1601*c - 1605*c for c.", "keywords": "-6"},
+        {"question": "Solve 72 = -25*n + n for n.", "keywords": "-3"},
+        {"question": "Solve -10*t = -5*t + 5*t for t.", "keywords": "0"},
+        {"question": "Solve -525*u + 566*u - 205 = 0 for u.", "keywords": "5"},
+        {"question": "Suppose a function f(x) is defined as f(x) = ax^2 + bx + c. If f(1) = 6, f(2) = 11, and f(3) = 18, find the value of f(4).", "keywords": "Quadratic function, System of equations, Substitution, Evaluate f(4), 27"},
         # Add more math questions
     ],
     "science": [
