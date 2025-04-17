@@ -47,6 +47,99 @@ def search_similar_chunks(query: str, chroma_db: Chroma, top_k: int = 10) -> Lis
     Returns:
         List of document chunks as formatted strings
     """
+    # First, try to find an exact match for the question
+    exact_matches = []
+    
+    try:
+        # Get all documents
+        all_docs = chroma_db.get()
+        
+        if all_docs and "documents" in all_docs and all_docs["documents"]:
+            clean_query = query.strip().lower()
+            
+            for i, doc in enumerate(all_docs["documents"]):
+                # Check different formats of questions in documents
+                if isinstance(doc, str):
+                    # Handle JSON-like format (from mathcoder.jsonl)
+                    if '"question": "' in doc.lower():
+                        # Extract the question from JSON-like text
+                        try:
+                            import json
+                            # Try to parse as JSON if possible
+                            if doc.strip().startswith("{") and doc.strip().endswith("}"):
+                                json_data = json.loads(doc)
+                                if "question" in json_data and clean_query == json_data["question"].lower():
+                                    source = all_docs["metadatas"][i].get("source", "Unknown") if all_docs["metadatas"] else "Unknown"
+                                    exact_matches.append((source, doc))
+                                    print(f"Found exact JSON question match: {query}")
+                                    continue
+                        except:
+                            pass
+                            
+                        # Fallback to string search if JSON parsing fails
+                        question_start = doc.lower().find('"question": "') + 13
+                        if question_start > 12:  # If found
+                            question_end = doc.find('"', question_start)
+                            if question_end > question_start:
+                                doc_question = doc[question_start:question_end].lower()
+                                if clean_query == doc_question:
+                                    source = all_docs["metadatas"][i].get("source", "Unknown") if all_docs["metadatas"] else "Unknown"
+                                    exact_matches.append((source, doc))
+                                    print(f"Found exact string-parsed question match: {query}")
+                    
+                    # Standard format with "Question: " prefix
+                    elif "question: " in doc.lower():
+                        doc_parts = doc.lower().split("question: ", 1)
+                        if len(doc_parts) > 1:
+                            # Extract the question part and clean it
+                            doc_question = doc_parts[1].split("\n", 1)[0] if "\n" in doc_parts[1] else doc_parts[1]
+                            doc_question = doc_question.strip()
+                            
+                            if clean_query == doc_question:
+                                source = all_docs["metadatas"][i].get("source", "Unknown") if all_docs["metadatas"] else "Unknown"
+                                exact_matches.append((source, doc))
+                                print(f"Found exact question match with standard format: {query}")
+            
+            # If we found exact matches, prioritize them
+            if exact_matches:
+                formatted_results = []
+                for i, (source, content) in enumerate(exact_matches[:top_k]):
+                    # Try to extract question and answer in a clean format
+                    formatted_content = ""
+                    try:
+                        # For JSON format (like mathcoder.jsonl)
+                        if content.strip().startswith("{") and content.strip().endswith("}"):
+                            import json
+                            json_data = json.loads(content)
+                            if "question" in json_data and "answer" in json_data:
+                                formatted_content = f"[Exact Match {i+1}] Question: {json_data['question']}\nAnswer: {json_data['answer']}"
+                            else:
+                                formatted_content = f"[Exact Match {i+1}] {content}"
+                        else:
+                            formatted_content = f"[Exact Match {i+1}] {content}"
+                    except:
+                        formatted_content = f"[Exact Match {i+1}] {content}"
+                    
+                    # Add source information
+                    if source and source != "Unknown":
+                        formatted_content += f"\n-- Source: {os.path.basename(source)}"
+                    
+                    formatted_results.append(formatted_content)
+                
+                print(f"Found {len(formatted_results)} exact question matches")
+                
+                # If we found any exact matches, return them without similarity search
+                print(f"Using only exact matches as context - skipping similarity search")
+                return formatted_results
+                
+                # Original code (removed):
+                # # If we have enough exact matches, return them
+                # if len(formatted_results) >= top_k // 2:
+                #     return formatted_results
+    except Exception as e:
+        print(f"Error during exact match search: {e}")
+        # Continue with normal similarity search
+    
     # Check if the query contains a document ID pattern (e.g., 104-10326-10014)
     doc_id_pattern = r'\b\d{3}-\d{5}-\d{5}\b'
     doc_ids = re.findall(doc_id_pattern, query)
@@ -90,6 +183,36 @@ def search_similar_chunks(query: str, chroma_db: Chroma, top_k: int = 10) -> Lis
                 formatted_results.append(formatted_content)
             
             print(f"Found {len(formatted_results)} direct document matches")
+            
+            # If we had exact matches earlier, add them at the beginning
+            if 'exact_matches' in locals() and exact_matches:
+                # Format any exact matches we found earlier
+                exact_formatted = []
+                for i, (source, content) in enumerate(exact_matches):
+                    # Try to extract question and answer in a clean format for JSON content
+                    formatted_content = ""
+                    try:
+                        # For JSON format (like mathcoder.jsonl)
+                        if content.strip().startswith("{") and content.strip().endswith("}"):
+                            import json
+                            json_data = json.loads(content)
+                            if "question" in json_data and "answer" in json_data:
+                                formatted_content = f"[Exact Match {i+1}] Question: {json_data['question']}\nAnswer: {json_data['answer']}"
+                            else:
+                                formatted_content = f"[Exact Match {i+1}] {content}"
+                        else:
+                            formatted_content = f"[Exact Match {i+1}] {content}"
+                    except:
+                        formatted_content = f"[Exact Match {i+1}] {content}"
+                    
+                    if source and source != "Unknown":
+                        formatted_content += f"\n-- Source: {os.path.basename(source)}"
+                    exact_formatted.append(formatted_content)
+                
+                # Use only exact matches instead of combining
+                print(f"Using only exact matches from document IDs as context - skipping other results")
+                return exact_formatted
+            
             return formatted_results
     
     # If no document IDs or no direct matches found, fall back to similarity search
@@ -111,32 +234,70 @@ def search_similar_chunks(query: str, chroma_db: Chroma, top_k: int = 10) -> Lis
         
         formatted_results.append(content)
     
+    # If we had exact matches earlier, add them at the beginning
+    if 'exact_matches' in locals() and exact_matches:
+        # Format any exact matches we found earlier
+        exact_formatted = []
+        for i, (source, content) in enumerate(exact_matches):
+            # Try to extract question and answer in a clean format for JSON content
+            formatted_content = ""
+            try:
+                # For JSON format (like mathcoder.jsonl)
+                if content.strip().startswith("{") and content.strip().endswith("}"):
+                    import json
+                    json_data = json.loads(content)
+                    if "question" in json_data and "answer" in json_data:
+                        formatted_content = f"[Exact Match {i+1}] Question: {json_data['question']}\nAnswer: {json_data['answer']}"
+                    else:
+                        formatted_content = f"[Exact Match {i+1}] {content}"
+                else:
+                    formatted_content = f"[Exact Match {i+1}] {content}"
+            except:
+                formatted_content = f"[Exact Match {i+1}] {content}"
+            
+            if source and source != "Unknown":
+                formatted_content += f"\n-- Source: {os.path.basename(source)}"
+            exact_formatted.append(formatted_content)
+        
+        # Use only exact matches instead of combining
+        print(f"Using only exact matches as context - skipping similarity search results")
+        return exact_formatted
+    
     return formatted_results
 
-def create_prompt(query: str, similar_chunks: List[str]) -> str:
+def create_prompt(query: str, similar_chunks: Optional[List[str]] = None) -> str:
     """
-    Create a prompt for the LLM using the query and similar chunks.
+    Create a prompt for the LLM using the query and optionally similar chunks.
     
     Args:
         query: User's query
-        similar_chunks: List of similar document chunks
+        similar_chunks: List of similar document chunks (optional)
         
     Returns:
         Formatted prompt
     """
-    # Combine the chunks into a single context string
-    context = "\n\n".join(similar_chunks)
-    
-    # Create the prompt with context
-    prompt = f"""Answer the question based on the following context:
-    
+    if similar_chunks:
+        # Combine the chunks into a single context string
+        context = "\n\n".join(similar_chunks)
+        
+        # Create the prompt with context
+        prompt = f"""Answer the question and use the provided context to enhance your answer if it is relevant:
+        
 Context:
 {context}
+
+---
+Question: {query}
+
+Answer:"""
+    else:
+        # Create a simple prompt without context
+        prompt = f"""Answer the following question directly:
 
 Question: {query}
 
 Answer:"""
-    
+
     return prompt
 
 def create_chat_interface(embeddings: OllamaEmbeddings, topics: List[str]):
@@ -221,7 +382,7 @@ def create_chat_interface(embeddings: OllamaEmbeddings, topics: List[str]):
                 print("Sending prompt to Ollama...")
                 response_text = ollama.invoke(prompt)
                 # --- Debug Print ---
-                print(f">>> LLM Raw Response: {response_text}")
+                #print(f">>> LLM Raw Response: {response_text}")
                 # --- End Debug Print ---
                 print(f"Received response from Ollama.")
 
@@ -238,14 +399,14 @@ def create_chat_interface(embeddings: OllamaEmbeddings, topics: List[str]):
                 if think_match:
                     thinking_content = think_match.group(1).strip()
                     if thinking_content: # Only append if there's actual content inside
-                        chat_history.append({"role": "assistant", "content": f"**Thinking:**\n{thinking_content}"})
+                        chat_history.append({"role": "assistant", "content": f"**Thinking:**\n{thinking_content}\n\n---\n\n"})
                     # Remove the thinking block from the original response
                     final_answer = response_text.replace(think_match.group(0), "").strip()
 
                 # 3. Append Final Answer
                 # Only append if there's a non-empty final answer left
                 if final_answer:
-                    chat_history.append({"role": "assistant", "content": f"**Answer:**\n{final_answer}"})
+                    chat_history.append({"role": "assistant", "content": f"**LLM Response:**\n{final_answer}"})
 
                 # Return None to clear input box, return updated history
                 return None, chat_history
