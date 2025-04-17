@@ -167,3 +167,7 @@ chroma/
 
 data/*
 document_tracker.json
+*.sqlite3
+chroma_dbs/*
+benchmark_results_both_*.json
+remove_duplicates.py

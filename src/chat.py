@@ -9,8 +9,10 @@ import re
 from typing import List, Dict, Any, Tuple, Optional
 
 import gradio as gr
-from langchain_community.llms import Ollama
-from langchain_community.vectorstores import Chroma
+# from langchain_community.llms import Ollama # Old import
+from langchain_ollama import OllamaLLM, OllamaEmbeddings # Added OllamaEmbeddings here too for clarity
+from langchain_chroma import Chroma # Corrected Chroma import (already done in vector_db.py, but good practice here too if used directly)
+from langchain_community.embeddings import OllamaEmbeddings
 
 from src.config import (
     OLLAMA_MODEL,
@@ -27,10 +29,11 @@ def get_ollama_client(ollama_url: str = OLLAMA_URL, ollama_model: str = OLLAMA_M
         ollama_model: Name of the Ollama model to use
         
     Returns:
-        Ollama LLM object
+        OllamaLLM object # Updated return type hint
     """
     print(f"Initializing Ollama client with model {ollama_model}")
-    return Ollama(base_url=ollama_url, model=ollama_model)
+    # Use the new class name OllamaLLM
+    return OllamaLLM(base_url=ollama_url, model=ollama_model)
 
 def search_similar_chunks(query: str, chroma_db: Chroma, top_k: int = 10) -> List[str]:
     """
@@ -44,6 +47,99 @@ def search_similar_chunks(query: str, chroma_db: Chroma, top_k: int = 10) -> Lis
     Returns:
         List of document chunks as formatted strings
     """
+    # First, try to find an exact match for the question
+    exact_matches = []
+    
+    try:
+        # Get all documents
+        all_docs = chroma_db.get()
+        
+        if all_docs and "documents" in all_docs and all_docs["documents"]:
+            clean_query = query.strip().lower()
+            
+            for i, doc in enumerate(all_docs["documents"]):
+                # Check different formats of questions in documents
+                if isinstance(doc, str):
+                    # Handle JSON-like format (from mathcoder.jsonl)
+                    if '"question": "' in doc.lower():
+                        # Extract the question from JSON-like text
+                        try:
+                            import json
+                            # Try to parse as JSON if possible
+                            if doc.strip().startswith("{") and doc.strip().endswith("}"):
+                                json_data = json.loads(doc)
+                                if "question" in json_data and clean_query == json_data["question"].lower():
+                                    source = all_docs["metadatas"][i].get("source", "Unknown") if all_docs["metadatas"] else "Unknown"
+                                    exact_matches.append((source, doc))
+                                    print(f"Found exact JSON question match: {query}")
+                                    continue
+                        except:
+                            pass
+                            
+                        # Fallback to string search if JSON parsing fails
+                        question_start = doc.lower().find('"question": "') + 13
+                        if question_start > 12:  # If found
+                            question_end = doc.find('"', question_start)
+                            if question_end > question_start:
+                                doc_question = doc[question_start:question_end].lower()
+                                if clean_query == doc_question:
+                                    source = all_docs["metadatas"][i].get("source", "Unknown") if all_docs["metadatas"] else "Unknown"
+                                    exact_matches.append((source, doc))
+                                    print(f"Found exact string-parsed question match: {query}")
+                    
+                    # Standard format with "Question: " prefix
+                    elif "question: " in doc.lower():
+                        doc_parts = doc.lower().split("question: ", 1)
+                        if len(doc_parts) > 1:
+                            # Extract the question part and clean it
+                            doc_question = doc_parts[1].split("\n", 1)[0] if "\n" in doc_parts[1] else doc_parts[1]
+                            doc_question = doc_question.strip()
+                            
+                            if clean_query == doc_question:
+                                source = all_docs["metadatas"][i].get("source", "Unknown") if all_docs["metadatas"] else "Unknown"
+                                exact_matches.append((source, doc))
+                                print(f"Found exact question match with standard format: {query}")
+            
+            # If we found exact matches, prioritize them
+            if exact_matches:
+                formatted_results = []
+                for i, (source, content) in enumerate(exact_matches[:top_k]):
+                    # Try to extract question and answer in a clean format
+                    formatted_content = ""
+                    try:
+                        # For JSON format (like mathcoder.jsonl)
+                        if content.strip().startswith("{") and content.strip().endswith("}"):
+                            import json
+                            json_data = json.loads(content)
+                            if "question" in json_data and "answer" in json_data:
+                                formatted_content = f"[Exact Match {i+1}] Question: {json_data['question']}\nAnswer: {json_data['answer']}"
+                            else:
+                                formatted_content = f"[Exact Match {i+1}] {content}"
+                        else:
+                            formatted_content = f"[Exact Match {i+1}] {content}"
+                    except:
+                        formatted_content = f"[Exact Match {i+1}] {content}"
+                    
+                    # Add source information
+                    if source and source != "Unknown":
+                        formatted_content += f"\n-- Source: {os.path.basename(source)}"
+                    
+                    formatted_results.append(formatted_content)
+                
+                print(f"Found {len(formatted_results)} exact question matches")
+                
+                # If we found any exact matches, return them without similarity search
+                print(f"Using only exact matches as context - skipping similarity search")
+                return formatted_results
+                
+                # Original code (removed):
+                # # If we have enough exact matches, return them
+                # if len(formatted_results) >= top_k // 2:
+                #     return formatted_results
+    except Exception as e:
+        print(f"Error during exact match search: {e}")
+        # Continue with normal similarity search
+    
     # Check if the query contains a document ID pattern (e.g., 104-10326-10014)
     doc_id_pattern = r'\b\d{3}-\d{5}-\d{5}\b'
     doc_ids = re.findall(doc_id_pattern, query)
@@ -87,6 +183,36 @@ def search_similar_chunks(query: str, chroma_db: Chroma, top_k: int = 10) -> Lis
                 formatted_results.append(formatted_content)
             
             print(f"Found {len(formatted_results)} direct document matches")
+            
+            # If we had exact matches earlier, add them at the beginning
+            if 'exact_matches' in locals() and exact_matches:
+                # Format any exact matches we found earlier
+                exact_formatted = []
+                for i, (source, content) in enumerate(exact_matches):
+                    # Try to extract question and answer in a clean format for JSON content
+                    formatted_content = ""
+                    try:
+                        # For JSON format (like mathcoder.jsonl)
+                        if content.strip().startswith("{") and content.strip().endswith("}"):
+                            import json
+                            json_data = json.loads(content)
+                            if "question" in json_data and "answer" in json_data:
+                                formatted_content = f"[Exact Match {i+1}] Question: {json_data['question']}\nAnswer: {json_data['answer']}"
+                            else:
+                                formatted_content = f"[Exact Match {i+1}] {content}"
+                        else:
+                            formatted_content = f"[Exact Match {i+1}] {content}"
+                    except:
+                        formatted_content = f"[Exact Match {i+1}] {content}"
+                    
+                    if source and source != "Unknown":
+                        formatted_content += f"\n-- Source: {os.path.basename(source)}"
+                    exact_formatted.append(formatted_content)
+                
+                # Use only exact matches instead of combining
+                print(f"Using only exact matches from document IDs as context - skipping other results")
+                return exact_formatted
+            
             return formatted_results
     
     # If no document IDs or no direct matches found, fall back to similarity search
@@ -108,89 +234,198 @@ def search_similar_chunks(query: str, chroma_db: Chroma, top_k: int = 10) -> Lis
         
         formatted_results.append(content)
     
+    # If we had exact matches earlier, add them at the beginning
+    if 'exact_matches' in locals() and exact_matches:
+        # Format any exact matches we found earlier
+        exact_formatted = []
+        for i, (source, content) in enumerate(exact_matches):
+            # Try to extract question and answer in a clean format for JSON content
+            formatted_content = ""
+            try:
+                # For JSON format (like mathcoder.jsonl)
+                if content.strip().startswith("{") and content.strip().endswith("}"):
+                    import json
+                    json_data = json.loads(content)
+                    if "question" in json_data and "answer" in json_data:
+                        formatted_content = f"[Exact Match {i+1}] Question: {json_data['question']}\nAnswer: {json_data['answer']}"
+                    else:
+                        formatted_content = f"[Exact Match {i+1}] {content}"
+                else:
+                    formatted_content = f"[Exact Match {i+1}] {content}"
+            except:
+                formatted_content = f"[Exact Match {i+1}] {content}"
+            
+            if source and source != "Unknown":
+                formatted_content += f"\n-- Source: {os.path.basename(source)}"
+            exact_formatted.append(formatted_content)
+        
+        # Use only exact matches instead of combining
+        print(f"Using only exact matches as context - skipping similarity search results")
+        return exact_formatted
+    
     return formatted_results
 
-def create_prompt(query: str, similar_chunks: List[str]) -> str:
+def create_prompt(query: str, similar_chunks: Optional[List[str]] = None) -> str:
     """
-    Create a prompt for the LLM using the query and similar chunks.
+    Create a prompt for the LLM using the query and optionally similar chunks.
     
     Args:
         query: User's query
-        similar_chunks: List of similar document chunks
+        similar_chunks: List of similar document chunks (optional)
         
     Returns:
         Formatted prompt
     """
-    # Combine the chunks into a single context string
-    context = "\n\n".join(similar_chunks)
-    
-    # Create the prompt with context
-    prompt = f"""Answer the question based on the following context:
-    
+    if similar_chunks:
+        # Combine the chunks into a single context string
+        context = "\n\n".join(similar_chunks)
+        
+        # Create the prompt with context
+        prompt = f"""Answer the question and use the provided context to enhance your answer if it is relevant:
+        
 Context:
 {context}
+
+---
+Question: {query}
+
+Answer:"""
+    else:
+        # Create a simple prompt without context
+        prompt = f"""Answer the following question directly:
 
 Question: {query}
 
 Answer:"""
-    
+
     return prompt
 
-def chat_ollama(message: str, history: List[Tuple[str, str]], chroma_db: Optional[Chroma] = None):
+def create_chat_interface(embeddings: OllamaEmbeddings, topics: List[str]):
     """
-    Process a chat message using Ollama and the vector database.
-    
-    Args:
-        message: User's message
-        history: Chat history
-        chroma_db: Chroma database object
-        
-    Returns:
-        LLM's response
-    """
-    # Initialize the vector database if not provided
-    if chroma_db is None:
-        embeddings = get_embeddings()
-        chroma_db = load_vector_db(embeddings=embeddings)
-    
-    # Initialize the Ollama client
-    ollama = get_ollama_client()
-    
-    # Search for similar chunks
-    similar_chunks = search_similar_chunks(message, chroma_db)
-    
-    # Create the prompt
-    if similar_chunks:
-        prompt = create_prompt(message, similar_chunks)
-    else:
-        # If no similar chunks found, just use the message directly
-        prompt = message
-    
-    # Get the response from Ollama
-    response = ollama(prompt)
-    
-    return response
+    Create the Gradio chat interface with topic selection.
 
-def create_chat_interface(chroma_db: Chroma):
-    """
-    Create the Gradio chat interface.
-    
     Args:
-        chroma_db: Chroma database object
-        
+        embeddings: Initialized OllamaEmbeddings object.
+        topics: List of available topic names.
+
     Returns:
-        Gradio ChatInterface object
+        Gradio Blocks interface object.
     """
-    # Create a wrapped chat function that includes the database
-    def chat_fn(message, history):
-        return chat_ollama(message, history, chroma_db)
-    
-    # Create the chat interface
-    chat_interface = gr.ChatInterface(
-        chat_fn,
-        examples=["What is Langchain?", "Tell me about vector databases", "How does RAG work?"],
-        title="Ollama RAG ChatApp",
-        description="Chat with your documents using Ollama and RAG",
-    )
-    
+    print(f"Creating chat interface with topics: {topics}")
+
+    with gr.Blocks() as chat_interface:
+        gr.Markdown("## Ollama RAG ChatApp with Topic Selection")
+
+        with gr.Row():
+            with gr.Column(scale=1):
+                gr.Markdown("### Select Topic")
+                topic_selector = gr.Radio(
+                    choices=topics,
+                    value=topics[0] if topics else None, # Default to first topic
+                    label="Chat Topic",
+                    info="Choose the knowledge base to chat with."
+                )
+            with gr.Column(scale=4):
+                chatbot = gr.Chatbot(label="Chat History", height=500, type='messages')
+                msg_input = gr.Textbox(label="Your Message", placeholder="Type your question here...")
+                clear_button = gr.Button("Clear Chat")
+
+        # Define the core chat logic function
+        def respond(message: str, chat_history: List[Dict[str, str]], selected_topic: str):
+            print(f"\nReceived message: '{message}' for topic: '{selected_topic}'")
+            if not selected_topic:
+                 gr.Warning("Please select a topic first!")
+                 # Return None for message, keep history as is
+                 return None, chat_history
+
+            # Append user message in the new format before processing
+            chat_history.append({"role": "user", "content": message})
+
+            try:
+                # 1. Load the correct vector database for the selected topic
+                print(f"Loading vector DB for topic: {selected_topic}")
+                chroma_db = load_vector_db(topic=selected_topic, embeddings=embeddings)
+                print(f"Vector DB loaded.") # Added confirmation
+
+                # 2. Initialize the Ollama client
+                print("Attempting to initialize Ollama client...") # Debug
+                ollama = get_ollama_client()
+                print("Ollama client initialized.") # Debug
+
+                # 3. Search for similar chunks
+                print(f"Attempting to search for similar chunks for query: '{message}'") # Debug
+                similar_chunks = search_similar_chunks(message, chroma_db)
+                print(f"Similarity search completed. Found {len(similar_chunks)} chunks.") # Debug
+
+                # 4. Create the prompt & handle context display
+                context_prefix = ""
+                if similar_chunks:
+                    print(f"Found {len(similar_chunks)} similar chunks. Creating prompt.")
+                    prompt = create_prompt(message, similar_chunks)
+                    # Extract filenames instead of content snippets
+                    filenames = []
+                    for chunk in similar_chunks:
+                        match = re.search(r"-- Source: (.*)$", chunk)
+                        if match:
+                            filenames.append(f"- {match.group(1).strip()}")
+                        else:
+                            filenames.append("- Unknown Source")
+                    context_display = "\n".join(filenames)
+                    context_prefix = f"**Retrieved Context From:**\n{context_display}\n\n---\n\n" # Changed label slightly
+                    # OPTIONAL: Add context as a separate message (alternative to prefixing)
+                    # chat_history.append({"role": "system", "content": f"Retrieved Context:\n{context_display}"}) 
+                else:
+                    print("No similar chunks found. Using direct query as prompt.")
+                    prompt = message
+
+                # 5. Get the response from Ollama
+                print("Sending prompt to Ollama...")
+                response_text = ollama.invoke(prompt)
+                # --- Debug Print ---
+                #print(f">>> LLM Raw Response: {response_text}")
+                # --- End Debug Print ---
+                print(f"Received response from Ollama.")
+
+                # --- Split response into Context, Thinking, and Answer ---
+
+                # 1. Append Context (if any)
+                if context_prefix:
+                    chat_history.append({"role": "assistant", "content": context_prefix})
+
+                # 2. Extract and Append Thinking (if any)
+                think_match = re.search(r"<think>(.*?)</think>", response_text, re.DOTALL)
+                final_answer = response_text # Default to full response
+
+                if think_match:
+                    thinking_content = think_match.group(1).strip()
+                    if thinking_content: # Only append if there's actual content inside
+                        chat_history.append({"role": "assistant", "content": f"**Thinking:**\n{thinking_content}\n\n---\n\n"})
+                    # Remove the thinking block from the original response
+                    final_answer = response_text.replace(think_match.group(0), "").strip()
+
+                # 3. Append Final Answer
+                # Only append if there's a non-empty final answer left
+                if final_answer:
+                    chat_history.append({"role": "assistant", "content": f"**LLM Response:**\n{final_answer}"})
+
+                # Return None to clear input box, return updated history
+                return None, chat_history
+
+            except Exception as e:
+                print(f"Error during chat processing for topic '{selected_topic}': {e}")
+                gr.Error(f"An error occurred: {e}")
+                # Append error message as assistant response
+                chat_history.append({"role": "assistant", "content": f"Sorry, an error occurred: {e}"}) 
+                # Return None to clear input box, return updated history with error
+                return None, chat_history
+
+        # Connect components
+        # The output components are now [msg_input, chatbot]
+        # We expect None for msg_input and the updated history for chatbot
+        msg_input.submit(respond, [msg_input, chatbot, topic_selector], [msg_input, chatbot])
+        # Clear function needs to return None for msg_input and empty list for chatbot
+        clear_button.click(lambda: (None, []), None, [msg_input, chatbot], queue=False)
+        # Optional: Allow changing topic to clear chat? Or keep history?
+        # topic_selector.change(lambda: (None, []), None, [msg_input, chatbot], queue=False) # Clears chat on topic change
+
     return chat_interface 
